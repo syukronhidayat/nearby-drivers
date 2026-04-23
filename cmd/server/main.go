@@ -9,8 +9,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/syukronhidayat/nearby-drivers/internal/config"
 	"github.com/syukronhidayat/nearby-drivers/internal/httpapi"
+	"github.com/syukronhidayat/nearby-drivers/internal/store/redisstore"
+	"github.com/syukronhidayat/nearby-drivers/internal/throttle"
 )
 
 func main() {
@@ -19,9 +22,22 @@ func main() {
 		log.Fatalf("config error: %v", err)
 	}
 
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     cfg.RedisAddr,
+		Password: cfg.RedisPassword,
+		DB:       cfg.RedisDB,
+	})
+
+	driverStore := &redisstore.Store{RDB: rdb}
+
+	th := throttle.NewInMem(500 * time.Millisecond)
+
 	srv := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.NewRouter(cfg),
+		Addr: cfg.HTTPAddr,
+		Handler: httpapi.NewRouter(cfg, httpapi.Deps{
+			DriverStore: driverStore,
+			Throttler:   th,
+		}),
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 	}
 

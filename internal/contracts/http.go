@@ -25,6 +25,10 @@ type GetDriversNearbyQuery struct {
 	Limit          int     `json:"limit"`
 }
 
+type GetDriversNearbyResponse struct {
+	Drivers []DriverView `json:"drivers"`
+}
+
 type HTTPErrorResponse struct {
 	Error struct {
 		Code    HTTPErrorCode `json:"code"`

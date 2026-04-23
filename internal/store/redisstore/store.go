@@ -17,9 +17,10 @@ type Store struct {
 }
 
 type NearbyQuery struct {
-	PickupLat, PickupLon float64
-	RadiusMiles          float64
-	Limit                int
+	PickupLat   float64
+	PickupLon   float64
+	RadiusMiles float64
+	Limit       int
 }
 
 type NearbyResult struct {
