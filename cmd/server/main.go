@@ -12,8 +12,10 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/syukronhidayat/nearby-drivers/internal/config"
 	"github.com/syukronhidayat/nearby-drivers/internal/httpapi"
+	"github.com/syukronhidayat/nearby-drivers/internal/pubsub"
 	"github.com/syukronhidayat/nearby-drivers/internal/store/redisstore"
 	"github.com/syukronhidayat/nearby-drivers/internal/throttle"
+	"github.com/syukronhidayat/nearby-drivers/internal/ws"
 )
 
 func main() {
@@ -30,6 +32,9 @@ func main() {
 
 	driverStore := &redisstore.Store{RDB: rdb}
 
+	hub := ws.NewHub(driverStore)
+	pub := &pubsub.DriverUpdatesConsumer{RDB: rdb, Hub: hub}
+
 	th := throttle.NewInMem(500 * time.Millisecond)
 
 	srv := &http.Server{
@@ -37,6 +42,7 @@ func main() {
 		Handler: httpapi.NewRouter(cfg, httpapi.Deps{
 			DriverStore: driverStore,
 			Throttler:   th,
+			Hub:         hub,
 		}),
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 	}
@@ -51,6 +57,13 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	go hub.Run(ctx)
+	go func() {
+		if err := pub.Run(ctx); err != nil && err != context.Canceled {
+			log.Printf("pubsub consumer stopper: %v", err)
+		}
+	}()
 
 	select {
 	case <-ctx.Done():

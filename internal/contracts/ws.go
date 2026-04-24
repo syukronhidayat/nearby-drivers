@@ -36,6 +36,7 @@ type DriverLocation struct {
 type DriverView struct {
 	DriverLocation
 	DistanceMiles float64 `json:"distanceMiles"`
+	ETASeconds    *int64  `json:"etaSeconds,omitempty"`
 }
 
 type WSDriversInitialPayload struct {

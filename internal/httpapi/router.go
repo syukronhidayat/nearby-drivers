@@ -8,6 +8,7 @@ import (
 	"github.com/syukronhidayat/nearby-drivers/internal/httpapi/handlers"
 	"github.com/syukronhidayat/nearby-drivers/internal/store/redisstore"
 	"github.com/syukronhidayat/nearby-drivers/internal/throttle"
+	"github.com/syukronhidayat/nearby-drivers/internal/ws"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -16,6 +17,7 @@ import (
 type Deps struct {
 	DriverStore *redisstore.Store
 	Throttler   throttle.Throttler
+	Hub         *ws.Hub
 }
 
 func NewRouter(cfg config.Config, deps Deps) http.Handler {
@@ -40,6 +42,10 @@ func NewRouter(cfg config.Config, deps Deps) http.Handler {
 	r.Route("/v1", func(r chi.Router) {
 		r.Post("/drivers/location", dh.PostDriverLocation)
 		r.Get("/drivers/nearby", dh.GetDriversNearby)
+
+		if deps.Hub != nil {
+			r.Get("/ws", handlers.NewWSHandler(deps.Hub).ServeHTTP)
+		}
 	})
 
 	return r

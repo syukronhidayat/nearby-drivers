@@ -13,6 +13,12 @@ import (
 	"github.com/syukronhidayat/nearby-drivers/internal/throttle"
 )
 
+const (
+	milesToMetes     = 1609.344
+	fallbackSpeedMps = 8.33
+	minSpeedMps      = 1.0
+)
+
 type DriversHandler struct {
 	Store *redisstore.Store
 
@@ -53,7 +59,7 @@ func (h *DriversHandler) PostDriverLocation(w http.ResponseWriter, r *http.Reque
 
 	if h.Throttler != nil {
 		throttled, err := h.Throttler.ShouldThrottle(r.Context(), normalized.DriverID, now)
-		if err != nil && throttled {
+		if err == nil && throttled {
 			writeJSON(w, http.StatusOK, contracts.PostDriverLocationResponse{Accepted: true, Throttled: true})
 			return
 		}
@@ -136,6 +142,7 @@ func (h *DriversHandler) GetDriversNearby(w http.ResponseWriter, r *http.Request
 		out = append(out, contracts.DriverView{
 			DriverLocation: loc,
 			DistanceMiles:  distByID[id],
+			ETASeconds:     estimateETASeconds(distByID[id], loc.Speed),
 		})
 	}
 
@@ -310,4 +317,23 @@ func parseInt64(s string) (int64, bool) {
 	}
 	n, err := strconv.ParseInt(s, 10, 64)
 	return n, err == nil
+}
+
+func estimateETASeconds(distanceMiles float64, speedMps *float64) *int64 {
+	if distanceMiles <= 0 {
+		v := int64(0)
+		return &v
+	}
+
+	v := fallbackSpeedMps
+	if speedMps != nil && isFinite(*speedMps) && *speedMps > 0 {
+		v = *speedMps
+	}
+	if v < minSpeedMps {
+		v = minSpeedMps
+	}
+
+	meters := distanceMiles * milesToMetes
+	sec := int64(math.Ceil(meters / v))
+	return &sec
 }

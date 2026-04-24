@@ -186,7 +186,9 @@ func (s *Store) LoadDriverUpdatedMs(ctx context.Context, driverIDs []string) (ma
 	}
 
 	for i, s := range scores {
-		// go-redis returns float64
+		if s == 0 {
+			continue
+		}
 		res[driverIDs[i]] = int64(s)
 	}
 
