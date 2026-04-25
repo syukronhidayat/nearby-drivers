@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/syukronhidayat/nearby-drivers/internal/cleanup"
 	"github.com/syukronhidayat/nearby-drivers/internal/config"
 	"github.com/syukronhidayat/nearby-drivers/internal/httpapi"
 	"github.com/syukronhidayat/nearby-drivers/internal/pubsub"
@@ -62,6 +63,18 @@ func main() {
 	go func() {
 		if err := pub.Run(ctx); err != nil && err != context.Canceled {
 			log.Printf("pubsub consumer stopper: %v", err)
+		}
+	}()
+
+	cleaner := &cleanup.RedisCleanup{
+		RDB:       rdb,
+		Every:     60 * time.Second,
+		MaxAge:    10 * time.Minute,
+		BatchSize: 1000,
+	}
+	go func() {
+		if err := cleaner.Run(ctx); err != nil && err != context.Canceled {
+			log.Printf("redis cleanup stopper: %v", err)
 		}
 	}()
 
