@@ -2,7 +2,7 @@
 
 A real-time backend service for ingesting driver GPS updates and streaming nearby driver changes to admin clients over WebSocket.
 
-This project is designed as a portfolio-grade implementation of:
+This project is designed as the implementation of:
 - geospatial search with Redis GEO
 - freshness and stale handling
 - real-time pub/sub fanout
