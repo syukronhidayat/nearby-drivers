@@ -11,7 +11,9 @@ import (
 )
 
 type Hub struct {
-	store *redisstore.Store
+	store          *redisstore.Store
+	maxSubsPerConn int
+	snapshotSem    chan struct{}
 
 	register     chan *Client
 	unregister   chan string
@@ -28,19 +30,24 @@ type Hub struct {
 
 func NewHub(store *redisstore.Store) *Hub {
 	return &Hub{
-		store:        store,
-		register:     make(chan *Client, 64),
-		unregister:   make(chan string, 64),
-		subscribe:    make(chan subscribeReq, 64),
-		unsubscribe:  make(chan unsubscribeReq, 64),
-		driverUpsert: make(chan contracts.DriverLocation, 1024),
-		snapshotDone: make(chan snapshotResult, 64),
-		conns:        make(map[string]*Client),
-		subsByConn:   make(map[string]map[string]*subscription),
+		store:          store,
+		maxSubsPerConn: 25,
+		snapshotSem:    make(chan struct{}, 8),
+		register:       make(chan *Client, 64),
+		unregister:     make(chan string, 64),
+		subscribe:      make(chan subscribeReq, 64),
+		unsubscribe:    make(chan unsubscribeReq, 64),
+		driverUpsert:   make(chan contracts.DriverLocation, 1024),
+		snapshotDone:   make(chan snapshotResult, 64),
+		conns:          make(map[string]*Client),
+		subsByConn:     make(map[string]map[string]*subscription),
 	}
 }
 
 func (h *Hub) Run(ctx context.Context) {
+	staleTicker := time.NewTicker(1 * time.Second)
+	defer staleTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -50,6 +57,9 @@ func (h *Hub) Run(ctx context.Context) {
 			}
 			return
 
+		case <-staleTicker.C:
+			h.sweepStale(time.Now().UnixMilli())
+
 		case c := <-h.register:
 			h.conns[c.ID] = c
 			if _, ok := h.subsByConn[c.ID]; !ok {
@@ -58,6 +68,9 @@ func (h *Hub) Run(ctx context.Context) {
 
 		case connID := <-h.unregister:
 			h.dropConn(connID)
+
+		case req := <-h.subscribe:
+			h.handleSubscribe(req)
 
 		case req := <-h.unsubscribe:
 			h.handleUnsubscribe(req)
@@ -160,6 +173,21 @@ func (h *Hub) handleSubscribe(req subscribeReq) {
 		return
 	}
 
+	// Enforce per-connection subscription limit.
+	subs := h.subsByConn[req.connID]
+	if subs == nil {
+		subs = make(map[string]*subscription)
+		h.subsByConn[req.connID] = subs
+	}
+	if h.maxSubsPerConn > 0 && len(subs) >= h.maxSubsPerConn {
+		_ = c.SendEnvelope(contracts.WSMsgError, req.reqID, contracts.WSErrorPayload{
+			Code:    contracts.HTTPErrorValidation,
+			Message: "too many subscriptions for this connection",
+			Details: map[string]any{"max": h.maxSubsPerConn},
+		})
+		return
+	}
+
 	p := req.payload
 	sub := &subscription{
 		id:             p.SubscriptionID,
@@ -171,10 +199,15 @@ func (h *Hub) handleSubscribe(req subscribeReq) {
 		visible:        make(map[string]contracts.DriverView),
 	}
 
-	h.subsByConn[req.connID][sub.id] = sub
+	subs[sub.id] = sub
 
-	// Async initial snapshot so hub loop stays responsive
+	// Async initial snapshot with bounded concurrency.
 	go func() {
+		if h.snapshotSem != nil {
+			h.snapshotSem <- struct{}{}
+			defer func() { <-h.snapshotSem }()
+		}
+
 		views, errPayload := h.buildInitialSnapshot(req.connID, sub)
 		h.snapshotDone <- snapshotResult{
 			connID: req.connID,
@@ -371,6 +404,42 @@ func (h *Hub) buildInitialSnapshot(connID string, sub *subscription) ([]contract
 	}
 
 	return out, nil
+}
+
+func (h *Hub) sweepStale(nowMs int64) {
+	for connID, subs := range h.subsByConn {
+		c := h.conns[connID]
+		if c == nil {
+			continue
+		}
+
+		for _, sub := range subs {
+			if sub.maxAgeSec <= 0 {
+				continue
+			}
+			cutoffMs := nowMs - (sub.maxAgeSec * 1000)
+			if cutoffMs <= 0 {
+				continue
+			}
+
+			for driverID, view := range sub.visible {
+				if view.TimestampMs > cutoffMs {
+					continue
+				}
+
+				// Remove + emit stale removal
+				delete(sub.visible, driverID)
+
+				last := view.DriverLocation
+				_ = c.SendEnvelope(contracts.WSMsgDriverRemoved, nil, contracts.WSDriverRemovedPayload{
+					SubscriptionID: sub.id,
+					DriverID:       driverID,
+					Reason:         contracts.RemovalReasonStaleLocation,
+					LastKnown:      &last,
+				})
+			}
+		}
+	}
 }
 
 const (
